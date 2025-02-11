@@ -30,6 +30,11 @@
         # Python package of MCP service
         gooseFmPackage = poetry2nixPkgs.mkPoetryApplication {
           projectDir = ./.;
+
+	  propegatedBuildInputs = with pkgs; [
+	    sox
+	    rtl-sdr
+	  ];
           
           # Prefer wheels for faster builds
           preferWheels = true;
