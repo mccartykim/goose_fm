@@ -51,7 +51,7 @@ def audio_capture_thread(rtl_process):
     finally:
         rtl_process.stdout.close()
 
-@mcp.resource('audio://radio/raw_audio')
+@mcp.resource('radio://station/raw_audio')
 def radio_audio_stream():
     """Provide base64 encoded audio stream."""
     chunk = ''
@@ -69,7 +69,7 @@ def radio_audio_stream():
         'mime_type': 'audio/raw'
     }
 
-@mcp.resource('radio://frequency')
+@mcp.resource('radio://station/frequency')
 def radio_frequency():
     """Provide current radio frequency."""
     return {
@@ -144,33 +144,62 @@ def tune_radio(frequency: str) -> dict:
     try:
         # Simplified command with minimal parameters
         cmd = f"rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -"
+        play_cmd = "play -t s16 -r 48000 -e signed -b 16 -c 1 -"
         
         # Start rtl_fm process
-        rtl_process = subprocess.Popen(
+        current_process = subprocess.Popen(
             cmd.split(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True  # Ensures process is in its own group
+            text=True,
+            bufsize=1
         )
-        
-        # Start audio capture thread
-        capture_thread = threading.Thread(
-            target=audio_capture_thread, 
-            args=(rtl_process,), 
-            daemon=True
-        )
-        capture_thread.start()
-        
-        # Update global state
-        current_process = rtl_process
-        current_frequency = freq_float
-        
-        # Basic process check
-        time.sleep(1)
-        if rtl_process.poll() is not None:
-            # Process terminated early, check for errors
-            _, stderr = rtl_process.communicate()
+        # Verify process started successfully
+        if current_process.poll() is not None:
+            _, stderr = current_process.communicate()
             error_msg = stderr.decode().strip() if stderr else "Unknown error"
+            cleanup_process()
+            raise Exception(f"rtl_fm failed to start: {error_msg}")
+
+        # Start play process
+        play_process = subprocess.Popen(
+            play_cmd.split(),
+            stdin=current_process.stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+
+        if play_process.poll() is not None:
+            _, stderr = play_process.communicate()
+            error_msg = stderr.decode().strip() if stderr else "Unknown error"
+            current_process.kill()
+            cleanup_process()
+            raise Exception(f"play failed to start: {error_msg}")
+        # Start audio capture thread
+        audio_thread = threading.Thread(
+            target=audio_capture_thread,
+            args=(current_process,)
+        )
+        audio_thread.daemon = True  # Daemonize thread
+        audio_thread.start()
+        
+        # Give it a moment to start and check if it's still running
+        time.sleep(0.5)
+        if play_process.poll() is not None:
+            # Process has already terminated, get error output
+            _, stderr = play_process.communicate()
+            error_msg = stderr.strip() if stderr else "Unknown error"
+            raise Exception(f"Failed to start radio process: {error_msg}")
+        
+        # Start a non-blocking read of stderr
+        error_output = ""
+        try:
+            error_output = current_process.stderr.readline()
+        except:
+            pass
+            
+        if error_output and "Found 1 device(s):" not in error_output and "Using device" not in error_output:
             cleanup_process()
             raise Exception(f"Failed to start radio: {error_msg}")
         
