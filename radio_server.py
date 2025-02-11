@@ -54,17 +54,9 @@ def audio_capture_thread(rtl_process):
 @mcp.resource('radio://station/raw_audio')
 def radio_audio_stream():
     """Provide base64 encoded audio stream."""
-    chunk = ''
-    while not stop_event.is_set():
-        try:
-            # Non-blocking get
-            chunk = audio_buffer.get(timeout=0.1)
-        except queue.Empty:
-            # Yield empty string if no data
-            chunk = ''
     
     return {
-        'stream': chunk,
+        'stream': audio_buffer.get_nowait(),
         'encoding': 'base64',
         'mime_type': 'audio/raw'
     }
