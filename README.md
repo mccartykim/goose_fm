@@ -22,3 +22,5 @@ To add to Claude desktop:
   ]
 }
 ```
+
+Known issues: Nix flake doesn't seem to properly encapsulate sox and rtl_fm in their scope... yet
