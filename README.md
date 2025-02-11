@@ -1,29 +1,24 @@
 # Goose FM
 
-Goose FM is a radio server application that allows streaming and management of radio stations.
+A simple demonstration of how MCP servers work for a tech talk at work!
 
-## Features
-
-- Stream radio stations
-- Manage radio station playlists
-- Simple and intuitive interface
-
-## Installation
-
-You can install Goose FM using poetry:
-
-```bash
-poetry install
-```
+With an rtl-sdr dongle and an antenna, your AI assistant can tune into radio stations and play them via your speakers.
 
 ## Usage
 
-Run the radio server:
+The command to run this stdio server:
 
-```bash
-python radio_server.py
+```
+nix run github:mccartykim/goose_fm
 ```
 
-## License
-
-[Specify your license here]
+To add to Claude desktop:
+```
+"GooseFM": {
+  "command": "nix",
+  "args": [
+    "run",
+    "github:mccartykim/goose_fm",
+  ]
+}
+```

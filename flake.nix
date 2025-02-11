@@ -25,19 +25,12 @@
           rtl-sdr # For SDR functionality
           poetry
           python310
-          stdenv.cc.cc.lib
-          zlib
         ];
 
-        # Custom Python package
+        # Python package of MCP service
         gooseFmPackage = poetry2nixPkgs.mkPoetryApplication {
           projectDir = ./.;
           
-          # Enable overrides to handle package resolution issues
-          overrides = poetry2nixPkgs.defaultPoetryOverrides.extend (self: super: {
-            # Add specific overrides if needed
-          });
-
           # Prefer wheels for faster builds
           preferWheels = true;
         };
@@ -52,9 +45,11 @@
           default = gooseFmPackage;
         };
 
-        apps.default = {
-          type = "app";
-          program = "${runScript}/bin/goose-fm";
+        apps = {
+          default = {
+            type = "app";
+            program = "${runScript}/bin/goose-fm";
+          };
         };
 
         devShells.default = pkgs.mkShell {
