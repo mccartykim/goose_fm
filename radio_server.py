@@ -104,6 +104,7 @@ def tune_radio(frequency: str) -> dict:
     try:
         # Create the command - add -A fast AGC mode and gain setting
         cmd = f"rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -A fast -g 49.6 - | play -r 48000 -t s16 -L -c 1 - --buffer 2048"
+        play_cmd = "play -t s16 -r 48000 -e signed -b 16 -c 1 -"
         
         # Start the new process with error output captured
         current_process = subprocess.Popen(
@@ -132,6 +133,13 @@ def tune_radio(frequency: str) -> dict:
             pass
             
         if error_output and "Found 1 device(s):" not in error_output and "Using device" not in error_output:
+        # Start play process
+        play_process = subprocess.Popen(
+            play_cmd.split(),
+            stdin=rtl_process.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
             cleanup_process()
             raise Exception(f"Radio process reported error: {error_output}")
             
