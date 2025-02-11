@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10"
-mcp = "^1.2.1"
+mcp = {extras = ["cli"], version = "^1.2.1"}
 
 [build-system]
 requires = ["poetry-core"]

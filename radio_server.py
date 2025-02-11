@@ -19,47 +19,9 @@ import base64
 # Global variables
 current_process = None
 current_frequency = None
-audio_buffer = queue.Queue(maxsize=10000)  # Larger buffer for audio chunks
 stop_event = threading.Event()
 
 mcp = FastMCP("GooseFM")
-
-def audio_capture_thread(rtl_process):
-    """Capture audio from rtl_fm process into a thread-safe buffer."""
-    global audio_buffer
-    try:
-        while not stop_event.is_set():
-            chunk = rtl_process.stdout.read(4096)  # Read in 4KB chunks
-            if not chunk:
-                break
-            
-            # Encode chunk to base64 for easy transmission
-            base64_chunk = base64.b64encode(chunk).decode('utf-8')
-            
-            try:
-                # Non-blocking put with a timeout
-                audio_buffer.put(base64_chunk, block=False)
-            except queue.Full:
-                # If buffer is full, remove oldest chunk
-                try:
-                    audio_buffer.get_nowait()
-                except queue.Empty:
-                    pass
-                audio_buffer.put(base64_chunk, block=False)
-    except Exception as e:
-        print(f"Audio capture error: {e}")
-    finally:
-        rtl_process.stdout.close()
-
-@mcp.resource('radio://station/raw_audio')
-def radio_audio_stream():
-    """Provide base64 encoded audio stream."""
-    
-    return {
-        'stream': audio_buffer.get_nowait(),
-        'encoding': 'base64',
-        'mime_type': 'audio/raw'
-    }
 
 @mcp.resource('radio://station/frequency')
 def radio_frequency():
@@ -100,13 +62,6 @@ def cleanup_process():
     # Reset global state
     current_process = None
     current_frequency = None
-    
-    # Clear audio buffer
-    while not audio_buffer.empty():
-        try:
-            audio_buffer.get_nowait()
-        except queue.Empty:
-            break
     
     # Reset stop event
     stop_event.clear()
@@ -168,14 +123,6 @@ def tune_radio(frequency: str) -> dict:
             current_process.kill()
             cleanup_process()
             raise Exception(f"play failed to start: {error_msg}")
-        # Start audio capture thread
-        audio_thread = threading.Thread(
-            target=audio_capture_thread,
-            args=(current_process,)
-        )
-        audio_thread.daemon = True  # Daemonize thread
-        audio_thread.start()
-        
         # Give it a moment to start and check if it's still running
         time.sleep(0.5)
         if play_process.poll() is not None:
@@ -195,6 +142,7 @@ def tune_radio(frequency: str) -> dict:
             cleanup_process()
             raise Exception(f"Failed to start radio: {error_msg}")
         
+        current_frequency = formatted_freq
         return {
             "status": "success",
             "frequency": f"{freq_float} MHz",
