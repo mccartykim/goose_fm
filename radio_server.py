@@ -49,7 +49,7 @@ def kill_existing_radio_processes():
         # Kill rtl_fm processes
         subprocess.run(["pkill", "-f", "rtl_fm"], check=False)
         # Kill sox play processes
-        subprocess.run(["pkill", "-f", "play -r 48000"], check=False)
+        subprocess.run(["pkill", "-f", "play"], check=False)
         # Small delay to ensure processes are cleaned up
         time.sleep(0.5)
     except Exception as e:
@@ -143,17 +143,6 @@ def tune_radio(frequency: str) -> dict:
     except Exception as e:
         cleanup_process()  # Clean up in case of failure
         raise Exception(str(e))
-
-@mcp.tool()
-def tune_radio_tool(frequency: str) -> dict:
-    """Tune the radio to a specific frequency as a tool.
-    Accepts the same frequency formats as the resource endpoint."""
-    return tune_radio(frequency)
-
-@mcp.tool()
-def stop_radio_tool() -> dict:
-    """Stop the radio stream as a tool."""
-    return stop_radio()
 
 @mcp.prompt()
 def tune_radio_prompt(frequency: str) -> str:
