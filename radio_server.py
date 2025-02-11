@@ -103,7 +103,7 @@ def tune_radio(frequency: str) -> dict:
     
     try:
         # Create the command - add -A fast AGC mode and gain setting
-        cmd = f"rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -A fast -g 49.6 - | play -r 48000 -t s16 -L -c 1 - --buffer 2048"
+        cmd = f"/bin/rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -A fast -g 49.6 - | /bin/play -r 48000 -t s16 -L -c 1 - --buffer 2048"
         
         # Start the new process with error output captured
         current_process = subprocess.Popen(

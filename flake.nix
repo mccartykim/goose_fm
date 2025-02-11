@@ -40,10 +40,14 @@
           preferWheels = true;
         };
 
-        # Create a wrapper script to run radio_server.py
-        runScript = pkgs.writeShellScriptBin "goose-fm" ''
+        # Create a wrapper script to run radio_server.py with runtime inputs
+        runScript = pkgs.writeShellApplication {
+	  name = "goose-fm";
+	  runtimeInputs = [ pkgs.sox pkgs.rtl-sdr ];
+	  text = ''
           ${gooseFmPackage.dependencyEnv}/bin/python ${./radio_server.py}
         '';
+	};
 
       in {
         packages = {
