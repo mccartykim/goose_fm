@@ -2,6 +2,7 @@
 # /// script
 # dependencies = [
 #     "mcp",
+#     "base64"
 # ]
 # ///
 
@@ -11,26 +12,73 @@ import signal
 import sys
 import os
 import time
+import threading
+import queue
+import base64
 
-# Global variable to store the current process
+# Global variables
 current_process = None
+current_frequency = None
+audio_buffer = queue.Queue(maxsize=10000)  # Larger buffer for audio chunks
+stop_event = threading.Event()
 
 mcp = FastMCP("GooseFM")
 
+def audio_capture_thread(rtl_process):
+    """Capture audio from rtl_fm process into a thread-safe buffer."""
+    global audio_buffer
+    try:
+        while not stop_event.is_set():
+            chunk = rtl_process.stdout.read(4096)  # Read in 4KB chunks
+            if not chunk:
+                break
+            
+            # Encode chunk to base64 for easy transmission
+            base64_chunk = base64.b64encode(chunk).decode('utf-8')
+            
+            try:
+                # Non-blocking put with a timeout
+                audio_buffer.put(base64_chunk, block=False)
+            except queue.Full:
+                # If buffer is full, remove oldest chunk
+                try:
+                    audio_buffer.get_nowait()
+                except queue.Empty:
+                    pass
+                audio_buffer.put(base64_chunk, block=False)
+    except Exception as e:
+        print(f"Audio capture error: {e}")
+    finally:
+        rtl_process.stdout.close()
+
+@mcp.resource('audio://radio/raw_audio')
+def radio_audio_stream():
+    """Provide base64 encoded audio stream."""
+    chunk = ''
+    while not stop_event.is_set():
+        try:
+            # Non-blocking get
+            chunk = audio_buffer.get(timeout=0.1)
+        except queue.Empty:
+            # Yield empty string if no data
+            chunk = ''
+    
+    return {
+        'stream': chunk,
+        'encoding': 'base64',
+        'mime_type': 'audio/raw'
+    }
+
+@mcp.resource('radio://frequency')
+def radio_frequency():
+    """Provide current radio frequency."""
+    return {
+        'frequency': current_frequency
+    }
+
 def parse_frequency(freq: str) -> float:
-    """Parse and validate the frequency string.
-    
-    Accepts formats:
-    - Plain number: "95.5", "98.6"
-    - With M suffix: "95.5M", "98.6M"
-    - With MHz suffix: "95.5MHz", "98.6MHz"
-    
-    Returns the frequency as a float if valid, raises ValueError if invalid.
-    """
-    # Remove whitespace and convert to uppercase
+    """Parse and validate the frequency string."""
     freq = freq.strip().upper()
-    
-    # Remove M or MHz suffix if present
     freq = freq.replace('MHZ', '').replace('M', '')
     
     try:
@@ -43,31 +91,33 @@ def parse_frequency(freq: str) -> float:
             raise
         raise ValueError("Frequency must be a number between 87.5 and 108.0 MHz")
 
-def kill_existing_radio_processes():
-    """Kill any existing rtl_fm and play processes."""
-    try:
-        # Kill rtl_fm processes
-        subprocess.run(["pkill", "-f", "rtl_fm"], check=False)
-        # Kill sox play processes
-        subprocess.run(["pkill", "-f", "play"], check=False)
-        # Small delay to ensure processes are cleaned up
-        time.sleep(0.5)
-    except Exception as e:
-        print(f"Warning: Error while killing existing processes: {e}")
-
 def cleanup_process():
-    """Clean up the current radio process if it exists."""
-    global current_process
-    if current_process:
+    """Clean up radio processes and threads."""
+    global current_process, current_frequency
+    
+    # Signal threads to stop
+    stop_event.set()
+    
+    # Kill existing processes
+    try:
+        subprocess.run(["pkill", "-f", "rtl_fm"], check=False)
+        subprocess.run(["pkill", "-f", "play"], check=False)
+    except Exception as e:
+        print(f"Process cleanup warning: {e}")
+    
+    # Reset global state
+    current_process = None
+    current_frequency = None
+    
+    # Clear audio buffer
+    while not audio_buffer.empty():
         try:
-            # Send SIGTERM to the process group
-            pgid = os.getpgid(current_process.pid)
-            os.killpg(pgid, signal.SIGTERM)
-        except:
-            pass
-        current_process = None
-    # Also make sure to kill any lingering processes
-    kill_existing_radio_processes()
+            audio_buffer.get_nowait()
+        except queue.Empty:
+            break
+    
+    # Reset stop event
+    stop_event.clear()
 
 @mcp.tool()
 def stop_radio() -> dict:
@@ -77,16 +127,8 @@ def stop_radio() -> dict:
 
 @mcp.tool()
 def tune_radio(frequency: str) -> dict:
-    """Tune the radio to the specified frequency.
-    
-    The frequency can be specified in the following formats:
-    - Plain number: "95.5", "98.6"
-    - With M suffix: "95.5M", "98.6M"
-    - With MHz suffix: "95.5MHz", "98.6MHz"
-    
-    The frequency must be between 87.5 and 108.0 MHz.
-    """
-    global current_process
+    """Tune the radio to the specified frequency."""
+    global current_process, current_frequency
     
     try:
         freq_float = parse_frequency(frequency)
@@ -95,83 +137,57 @@ def tune_radio(frequency: str) -> dict:
     
     # Clean up any existing process
     cleanup_process()
-    # Double-check for any lingering processes
-    kill_existing_radio_processes()
     
-    # Always format frequency with M suffix for rtl_fm
+    # Ensure clean start
     formatted_freq = f"{freq_float}M"
     
     try:
-        # Create the command - add -A fast AGC mode and gain setting
-        cmd = f"rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -A fast -g 49.6 - | play -r 48000 -t s16 -L -c 1 - --buffer 2048"
-        play_cmd = "play -t s16 -r 48000 -e signed -b 16 -c 1 -"
+        # Simplified command with minimal parameters
+        cmd = f"rtl_fm -f {formatted_freq} -s 240000 -r 48000 -l 30 -"
         
-        # Start the new process with error output captured
-        current_process = subprocess.Popen(
-            cmd,
-            shell=True,
-            preexec_fn=os.setsid,  # Create new process group
-            stderr=subprocess.PIPE,
+        # Start rtl_fm process
+        rtl_process = subprocess.Popen(
+            cmd.split(),
             stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1
+            stderr=subprocess.PIPE,
+            start_new_session=True  # Ensures process is in its own group
         )
         
-        # Give it a moment to start and check if it's still running
-        time.sleep(0.5)
-        if current_process.poll() is not None:
-            # Process has already terminated, get error output
-            _, stderr = current_process.communicate()
-            error_msg = stderr.strip() if stderr else "Unknown error"
-            raise Exception(f"Failed to start radio process: {error_msg}")
-        
-        # Start a non-blocking read of stderr
-        error_output = ""
-        try:
-            error_output = current_process.stderr.readline()
-        except:
-            pass
-            
-        if error_output and "Found 1 device(s):" not in error_output and "Using device" not in error_output:
-        # Start play process
-        play_process = subprocess.Popen(
-            play_cmd.split(),
-            stdin=rtl_process.stdout,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+        # Start audio capture thread
+        capture_thread = threading.Thread(
+            target=audio_capture_thread, 
+            args=(rtl_process,), 
+            daemon=True
         )
+        capture_thread.start()
+        
+        # Update global state
+        current_process = rtl_process
+        current_frequency = freq_float
+        
+        # Basic process check
+        time.sleep(1)
+        if rtl_process.poll() is not None:
+            # Process terminated early, check for errors
+            _, stderr = rtl_process.communicate()
+            error_msg = stderr.decode().strip() if stderr else "Unknown error"
             cleanup_process()
-            raise Exception(f"Radio process reported error: {error_output}")
-            
+            raise Exception(f"Failed to start radio: {error_msg}")
+        
         return {
             "status": "success",
             "frequency": f"{freq_float} MHz",
             "formatted_command_frequency": formatted_freq
         }
     except Exception as e:
-        cleanup_process()  # Clean up in case of failure
+        cleanup_process()
         raise Exception(str(e))
 
-@mcp.prompt()
-def tune_radio_prompt(frequency: str) -> str:
-    """Create a prompt to tune the radio to a specific frequency."""
-    return f"Please tune the radio to {frequency} MHz"
-
-@mcp.prompt()
-def stop_radio_prompt() -> str:
-    """Create a prompt to stop the radio."""
-    return "Please stop the radio stream"
-
 if __name__ == "__main__":
-    # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
         cleanup_process()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    # Clean up any existing processes on startup
-    kill_existing_radio_processes()
-    
-    # Run the server - FastMCP will handle this
     mcp.run()
